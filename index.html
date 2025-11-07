@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Personalized Flavor Compass</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.5.0/firebase-app.js";
+    import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.5.0/firebase-auth.js";
+    import { getFirestore, doc, setDoc, getDoc, setLogLevel } from "https://www.gstatic.com/firebasejs/12.5.0/firebase-firestore.js";
+    
+    window.firebase = {
+      initializeApp, getAuth, signInAnonymously, getFirestore, doc, setDoc, getDoc, setLogLevel
+    };
+  </script>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+          },
+          colors: {
+            primary: '#E96150',
+            secondary: '#5D2E8C',
+            accent: '#FFD700',
+            surface: '#f9f9fa',
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    @keyframes rotate {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .gradient {
+      --size: 750px;
+      --speed: 50s;
+      --easing: cubic-bezier(0.8, 0.2, 0.2, 0.8);
+      width: var(--size);
+      height: var(--size);
+      filter: blur(calc(var(--size) / 5));
+      background-image: linear-gradient(hsl(222, 84%, 60%), hsl(164, 79%, 71%));
+      animation: rotate var(--speed) var(--easing) alternate infinite;
+      border-radius: 30% 70% 70% 30% / 30% 30% 70% 70%;
+      position: absolute;
+      z-index: 0;
+    }
+
+    @media (min-width: 720px) {
+      .gradient {
+        --size: 500px;
+      }
+    }
+
+    body {
+      background-color: #071c39;
+      position: absolute;
+      inset: 0;
+      display: flex;
+      place-content: center;
+      align-items: center;
+      overflow: hidden;
+    }
+
+    * { transition: all 0.5s ease-out; }
+
+    .custom-scrollbar::-webkit-scrollbar { width: 8px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #E96150; border-radius: 4px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background-color: #f0f0f5; }
+
+    .flavor-btn {
+      @apply px-4 py-2 font-semibold rounded-lg transition duration-200 border-2 border-gray-200 text-gray-700 hover:bg-primary/10 hover:border-primary;
+    }
+
+    .flavor-btn.active {
+      @apply bg-secondary text-white border-secondary shadow-lg;
+    }
+
+    .dish-card {
+      @apply bg-white p-4 border-2 border-gray-100 rounded-xl shadow-lg transition-shadow duration-300 hover:shadow-xl;
+    }
+  </style>
+</head>
+
+<body class="font-sans min-h-screen p-4 flex items-center justify-center relative">
+  <div class="gradient"></div>
+
+  <div id="loading-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-70 flex items-center justify-center z-50">
+    <div class="text-white text-xl p-4 bg-secondary rounded-lg shadow-xl animate-pulse">
+      Initializing App and Connecting to Database...
+    </div>
+  </div>
+
+  <div id="app-container" class="w-full max-w-xl bg-white shadow-2xl rounded-xl p-6 md:p-8 transform transition-all duration-300 hidden relative z-10">
+    <header class="text-center mb-6">
+      <h1 class="text-4xl font-extrabold text-secondary tracking-tight">Personal Flavor pairer</h1>
+      <p class="text-sm text-gray-500 mt-1">Select your flavor profile and find tailored dish pairings!</p>
+      <p id="user-id-display" class="text-xs text-gray-400 mt-2"></p>
+    </header>
+
+    <div class="mb-8 border p-4 rounded-lg bg-primary/5">
+      <h2 class="text-lg font-bold text-primary mb-3">Your Flavor Profile: <span id="current-preference" class="font-extrabold text-secondary">Loading...</span></h2>
+      <div id="flavor-buttons" class="flex flex-wrap gap-2 justify-center"></div>
+      <p class="text-xs text-center text-gray-500 mt-3">Click to select and <strong>save</strong> your primary taste preference.</p>
+    </div>
+
+    <div class="mb-8 relative">
+      <label for="ingredient-input" class="block text-lg font-medium text-gray-700 mb-2">Search Main Ingredient:</label>
+      <div class="relative">
+        <svg class="w-5 h-5 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+        </svg>
+        <input type="text" id="ingredient-input" placeholder="E.g., Chicken, Tomato, Avocado" oninput="handleInput()" class="w-full p-3 pl-10 border-2 border-primary focus:border-secondary rounded-lg shadow-inner outline-none text-lg transition duration-150">
+      </div>
+    </div>
+
+    <div id="results-container" class="min-h-[10rem] border border-gray-200 rounded-lg p-4 bg-surface custom-scrollbar overflow-y-auto">
+      <p id="initial-message" class="text-center text-gray-400 mt-10 transition duration-300">
+        Start typing to find pairings tailored to your profile.
+      </p>
+    </div>
+  </div>
+
+  <script>
+    const FIREBASE_CONFIG = {
+      apiKey: "AIzaSyA8WNbStCp_1zsFOmxcwyHwLdwL6Ej03u4",
+      authDomain: "flavor-pairer.firebaseapp.com",
+      projectId: "flavor-pairer",
+      storageBucket: "flavor-pairer.firebasestorage.app",
+      messagingSenderId: "189762202433",
+      appId: "1:189762202433:web:848f1bda899d9d17990fc0"
+    };
+
+    let db, auth, userId;
+    const FLAVOR_PROFILE_DOC = 'flavorProfile';
+    const flavorTypes = ["Sweet", "Savory", "Spicy", "Umami", "Tart", "Bitter"];
+    let userPreference = "Savory";
+
+    const flavorPairings = [
+      { ingredient: "Strawberry", type: "Sweet", dish_pairs: [
+        { name: "Aperitivo Delight", dish1: "Feta & Black Pepper Strawberries", dish2: "Sparkling Mint Basil Lemonade" },
+        { name: "Summer Garden Brunch", dish1: "Ricotta & Balsamic Toast", dish2: "Fresh Strawberry & Mint Salad" }
+      ]},
+      { ingredient: "Tomato", type: "Umami", dish_pairs: [
+        { name: "Italian Sunburst", dish1: "Burrata with Pesto & Roasted Tomatoes", dish2: "Garlic & Balsamic Crostini" },
+        { name: "Mediterranean Voyage", dish1: "Slow-Cooked Tomato Soup", dish2: "Grilled Focaccia with Rosemary" }
+      ]},
+      { ingredient: "Avocado", type: "Savory", dish_pairs: [
+        { name: "Mexican Fiesta Duo", dish1: "Spicy Chili-Lime Guacamole", dish2: "Crispy Red Onion Tostadas" },
+        { name: "Sunrise Smash", dish1: "Avocado & Cumin Black Bean Toast", dish2: "Cilantro-Lime Vinaigrette Side Salad" }
+      ]},
+      { ingredient: "Chicken", type: "Savory", dish_pairs: [
+        { name: "Herb Garden Dinner", dish1: "Lemon & Rosemary Pan-Seared Chicken", dish2: "Creamy Thyme Polenta" },
+        { name: "Rustic Hearth Feast", dish1: "White Wine Braised Chicken Thighs", dish2: "Roasted Garlic Mashed Potatoes" }
+      ]},
+      { ingredient: "Chocolate", type: "Sweet", dish_pairs: [
+        { name: "Spicy Siesta", dish1: "Aztec Hot Chocolate with Chili Flakes", dish2: "Sea Salt Raspberry Brownies" },
+        { name: "Midnight Indulgence", dish1: "Orange-Zest Dark Chocolate Mousse", dish2: "Espresso Shortbread Cookies" }
+      ]},
+      { ingredient: "Chili Pepper", type: "Spicy", dish_pairs: [
+        { name: "Tropical Heatwave", dish1: "Grilled Pineapple Salsa", dish2: "Honey-Lime Glazed Shrimp Skewers" },
+        { name: "Southwest Fire", dish1: "Smoked Chili & Cumin Beef Brisket", dish2: "Lime and Cilantro Rice" }
+      ]},
+      { ingredient: "Coffee", type: "Bitter", dish_pairs: [
+        { name: "Dessert Espresso", dish1: "Espresso-Cardamom Panna Cotta", dish2: "Brown Sugar Coconut Macarons" },
+        { name: "Moroccan Spice Morning", dish1: "Clove & Coffee Rubbed Steak", dish2: "Hazelnut & Date Flatbread" }
+      ]},
+      { ingredient: "Pork", type: "Savory", dish_pairs: [
+        { name: "Autumn Harvest", dish1: "Apple Cider Braised Pork Chops", dish2: "Sage & Fennel Roasted Root Vegetables" },
+        { name: "Savory Sunday Roast", dish1: "Mustard Crusted Pork Tenderloin", dish2: "Plum & Red Wine Reduction" }
+      ]}
+    ];
+
+    const inputField = document.getElementById('ingredient-input');
+    const resultsContainer = document.getElementById('results-container');
+    const initialMessage = document.getElementById('initial-message');
+    const loadingOverlay = document.getElementById('loading-overlay');
+    const appContainer = document.getElementById('app-container');
+    const currentPreferenceDisplay = document.getElementById('current-preference');
+    const userIdDisplay = document.getElementById('user-id-display');
+
+    const getPreferenceDocRef = () => {
+      const userDocPath = `users/${userId}/preferences`;
+      return firebase.doc(db, userDocPath, FLAVOR_PROFILE_DOC);
+    };
+
+    async function setupAuthAndDatabase() {
+      try {
+        const firebaseConfig = FIREBASE_CONFIG;
+        const app = firebase.initializeApp(firebaseConfig);
+        db = firebase.getFirestore(app);
+        auth = firebase.getAuth(app);
+        firebase.setLogLevel('Error'); 
+        const userCredential = await firebase.signInAnonymously(auth);
+        userId = userCredential.user.uid;
+        userIdDisplay.textContent = `User ID: ${userId}`;
+        await loadFlavorType();
+        renderFlavorButtons();
+      } catch (error) {
+        console.error("Firebase Initialization Failed:", error);
+        loadingOverlay.innerHTML = `<div class='text-white text-xl p-4 bg-red-700 rounded-lg shadow-xl'>Initialization Error: ${error.message}</div>`;
+      } finally {
+        loadingOverlay.classList.add('hidden');
+        appContainer.classList.remove('hidden');
+      }
+    }
+
+    async function loadFlavorType() {
+      if (!db || !userId) return;
+      try {
+        const docRef = getPreferenceDocRef();
+        const docSnap = await firebase.getDoc(docRef);
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          userPreference = data.flavor || userPreference; 
+        }
+        updatePreferenceUI();
+      } catch (e) {
+        console.error("Error loading flavor type:", e);
+      }
+    }
+
+    async function saveFlavorType(flavor) {
+      if (!db || !userId) return;
+      try {
+        const docRef = getPreferenceDocRef();
+        await firebase.setDoc(docRef, { flavor: flavor, timestamp: new Date().toISOString() });
+        userPreference = flavor;
+        updatePreferenceUI();
+      } catch (e) {
+        console.error("Error saving flavor type:", e);
+      }
+    }
+
+    function updatePreferenceUI() {
+      currentPreferenceDisplay.textContent = userPreference;
+      document.querySelectorAll('.flavor-btn').forEach(btn => {
+        btn.classList.remove('active');
+        if (btn.textContent === userPreference) btn.classList.add('active');
+      });
+      handleInput();
+    }
+
+    function renderFlavorButtons() {
+      const container = document.getElementById('flavor-buttons');
+      container.innerHTML = '';
+      flavorTypes.forEach(flavor => {
+        const btn = document.createElement('button');
+        btn.textContent = flavor;
+        btn.className = 'flavor-btn';
+        btn.onclick = () => saveFlavorType(flavor); 
+        container.appendChild(btn);
+      });
+      updatePreferenceUI(); 
+    }
+
+    const cleanString = str => str.trim().toLowerCase();
+
+    window.setInputAndSearch = function(ingredient) {
+      inputField.value = ingredient;
+      handleInput();
+    }
+
+    function handleInput() {
+      const query = cleanString(inputField.value);
+      resultsContainer.innerHTML = '';
+      if (query.length === 0) {
+        initialMessage.classList.remove('hidden');
+        resultsContainer.appendChild(initialMessage);
+        return;
+      }
+      initialMessage.classList.add('hidden');
+      const foundPairing = flavorPairings.find(item => cleanString(item.ingredient).includes(query));
+      if (foundPairing) displayPairings(foundPairing);
+      else displayNotFound(query);
+    }
+
+    function displayPairings(pairing) {
+      const { ingredient, type, dish_pairs } = pairing;
+      const isTailored = type === userPreference;
+      const tailoringStatus = isTailored 
+        ? `<span class="text-sm font-semibold text-green-600 flex items-center gap-1">✔ Perfect Match for Your ${userPreference} Profile!</span>`
+        : `<span class="text-sm font-semibold text-orange-600 flex items-center gap-1">⚡ Flavor Type: ${type} (Your Profile: ${userPreference})</span>`;
+      const titleHTML = `
+        <h3 class="text-xl font-bold text-secondary mb-2">
+          Dish Duos for <span class="text-primary">${ingredient}</span>
+        </h3>
+        <p class="mb-4">${tailoringStatus}</p>
+      `;
+      resultsContainer.insertAdjacentHTML('beforeend', titleHTML);
+      const cardsContainer = document.createElement('div');
+      cardsContainer.className = 'grid gap-4 sm:grid-cols-2';
+      dish_pairs.forEach(dishPair => {
+        const card = document.createElement('div');
+        card.className = 'dish-card';
+        card.innerHTML = `
+          <h4 class="text-lg font-extrabold text-secondary mb-2">${dishPair.name}</h4>
+          <ul class="list-disc list-inside text-gray-700 space-y-1 ml-2 text-sm">
+            <li>${dishPair.dish1}</li>
+            <li>${dishPair.dish2}</li>
+          </ul>
+        `;
+        cardsContainer.appendChild(card);
+      });
+      resultsContainer.appendChild(cardsContainer);
+    }
+
+    function displayNotFound(query) {
+      const tailoredIngredients = flavorPairings.filter(item => item.type === userPreference).map(item => item.ingredient);
+      const otherIngredients = flavorPairings.filter(item => item.type !== userPreference).map(item => item.ingredient);
+      const availableIngredients = [...tailoredIngredients, ...otherIngredients];
+      const hintTags = availableIngredients.map(ing => {
+        const isTailoredHint = tailoredIngredients.includes(ing);
+        const colorClass = isTailoredHint ? 'bg-green-100 text-green-700 hover:bg-green-200' : 'bg-gray-100 text-gray-600 hover:bg-primary/20';
+        return `<span onclick="setInputAndSearch('${ing}')" class="cursor-pointer px-3 py-1 text-xs rounded-full transition duration-150 hover:shadow-md ${colorClass}">${ing} ${isTailoredHint ? '★' : ''}</span>`;
+      }).join('');
+      const html = `
+        <div class="text-center py-6">
+          <p class="text-3xl font-bold text-secondary">🙅 No Match Found</p>
+          <p class="text-md text-gray-600 mt-2">We couldn't find a pairing for "<span class="font-semibold text-primary">${query}</span>".</p>
+          <p class="text-sm text-gray-400 mt-4">Try clicking one of the available ingredients below (★ matches your <span class="font-semibold text-secondary">${userPreference}</span> profile):</p>
+          <div class="flex flex-wrap justify-center gap-2 mt-3 p-2 max-h-32 overflow-y-auto custom-scrollbar">
+            ${hintTags}
+          </div>
+        </div>
+      `;
+      resultsContainer.innerHTML = html;
+    }
+
+    window.onload = setupAuthAndDatabase;
+  </script>
+</body>
+</html>
