@@ -14,7 +14,7 @@ Demo video of working : [Link](https://drive.google.com/file/d/1SC7zWhd7j_tFFnAw
 - Open the link in your browser
 - Enter your flavor Profile
 - After that enter your ingredient
-- a pofile matching will appear with your profile
+- a profile matching will appear with your profile
 - That's it and your dish duos are on the screen.
 ## Author
 - Email: takshsingh313@gmail.com
